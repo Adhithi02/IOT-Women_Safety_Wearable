@@ -11,7 +11,7 @@
 .svn/
 .swiftpm/
 ./lib/firebase_options.dart
-./lib/secrets.dart
+./lib/secret.dart
 
 migrate_working_dir/
 
