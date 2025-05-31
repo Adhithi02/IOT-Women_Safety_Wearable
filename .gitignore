@@ -11,6 +11,8 @@
 .svn/
 .swiftpm/
 ./lib/firebase_options.dart
+./lib/secrets.dart
+
 migrate_working_dir/
 
 # IntelliJ related
@@ -32,7 +34,7 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
+/build/# Secrets
 
 # Symbolication related
 app.*.symbols
