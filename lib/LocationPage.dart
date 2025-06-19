@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
-import 'package:trial/secret.dart'; // replace with your actual project name
-
+import 'package:trial/secret.dart'; // replace with your actual secret.dart
 
 class LocationPage extends StatefulWidget {
   @override
@@ -13,9 +13,12 @@ class LocationPage extends StatefulWidget {
 }
 
 class _LocationPageState extends State<LocationPage> {
-  String userId = "user123";
+  String userId = "";
+  String? username;
+  String? emergencyEmail;
+
   Timer? _timer;
-  StreamSubscription<QuerySnapshot>? _keypadSubscription;
+  StreamSubscription<DocumentSnapshot>? _keypadSubscription;
 
   List<String> _logMessages = [];
   bool _locationServiceEnabled = false;
@@ -26,8 +29,38 @@ class _LocationPageState extends State<LocationPage> {
   @override
   void initState() {
     super.initState();
-    _initLocation();
-    _listenToKeypadCollection();
+    _setupUser();
+  }
+
+  Future<void> _setupUser() async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) {
+      _addLog("No user logged in.");
+      return;
+    }
+
+    userId = user.uid;
+    _addLog("Authenticated UID: $userId");
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+      if (doc.exists) {
+        final data = doc.data();
+        setState(() {
+          username = data?['username'] ?? "Unknown";
+          emergencyEmail = data?['emergencyEmail'] ?? "emergency@example.com";
+        });
+        _addLog("Fetched user data: username = $username, emergencyEmail = $emergencyEmail");
+
+        _initLocation();
+        _listenToKeypadCollection();
+      } else {
+        _addLog("User document not found.");
+      }
+    } catch (e) {
+      _addLog("Error fetching user data: $e");
+    }
   }
 
   void _addLog(String message) {
@@ -75,8 +108,10 @@ class _LocationPageState extends State<LocationPage> {
 
   void _uploadLocation(Position pos) async {
     try {
-      await FirebaseFirestore.instance.collection('locations').add({
-        'userId': userId,
+      await FirebaseFirestore.instance.collection('locations').
+      doc(username)
+      .collection('logs')
+      .add({
         'lat': pos.latitude,
         'lng': pos.longitude,
         'timestamp': FieldValue.serverTimestamp(),
@@ -86,94 +121,113 @@ class _LocationPageState extends State<LocationPage> {
       _addLog("Failed to send location: $e");
     }
   }
-
   void _listenToKeypadCollection() {
-    _addLog("Listening to 'keypad' collection...");
-    _keypadSubscription = FirebaseFirestore.instance.collection('keypad').snapshots().listen(
-      (querySnapshot) {
-        if (!_listeningToKeypad) {
-          setState(() {
-            _listeningToKeypad = true;
-          });
-        }
-        for (var docChange in querySnapshot.docChanges) {
-          if (docChange.type == DocumentChangeType.added || docChange.type == DocumentChangeType.modified) {
-            var data = docChange.doc.data();
-            if (data != null && data.containsKey('count')) {
-              int count = data['count'];
-              _addLog("Keypad document '${docChange.doc.id}' count: $count");
-              if (count == 3) {
-                _addLog("Count is 3! Triggering email send...");
-                _sendEmail();
-              }
+  _addLog("Listening to 'keypad/{username}/count'...");
+
+  if (username == null) {
+    _addLog("Username is null; can't listen to count.");
+    return;
+  }
+
+  final docRef = FirebaseFirestore.instance.collection('keypad').doc(username).collection('meta').doc('count');
+
+  _keypadSubscription = docRef.snapshots().listen(
+    (docSnapshot) async {
+      if (!_listeningToKeypad) {
+        setState(() {
+          _listeningToKeypad = true;
+        });
+      }
+
+      if (docSnapshot.exists) {
+        final data = docSnapshot.data();
+        if (data != null && data.containsKey('count')) {
+          int count = data['count'];
+          _addLog("🧮 Count value: $count");
+
+          if (count == 3) {
+            _addLog("🚨 Count is 3! Triggering emergency email...");
+            await _sendEmail();
+
+            // Reset count to 0 after email
+            try {
+              await docRef.update({'count': 0});
+              _addLog("✅ Count reset to 0 after email.");
+            } catch (e) {
+              _addLog("❌ Failed to reset count: $e");
             }
           }
         }
-      },
-      onError: (error) {
-        _addLog("Error listening to keypad collection: $error");
-        setState(() {
-          _listeningToKeypad = false;
-        });
-      },
-    );
+      } else {
+        _addLog("⚠️ Document does not exist at 'keypad/$username/meta/count'");
+      }
+    },
+    onError: (error) {
+      _addLog("❌ Error listening to count document: $error");
+      setState(() {
+        _listeningToKeypad = false;
+      });
+    },
+  );
+}
+
+  
+  Future<void> _sendEmail() async {
+    if (_emailSendingInProgress) {
+      _addLog("Email sending already in progress, skipping duplicate.");
+      return;
+    }
+
+    setState(() {
+      _emailSendingInProgress = true;
+    });
+
+    final now = DateTime.now().toLocal().toString();
+    final url = Uri.parse('https://api.emailjs.com/api/v1.0/email/send');
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {
+          'origin': 'http://localhost',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'service_id': serviceId,
+          'template_id': templateId,
+          'user_id': userIdEmailJS,
+          'template_params': {
+            'name': username ?? 'User',
+            'time': now,
+            'message': 'Location tracking has started. Coordinates are being stored in Firebase.',
+            'to_email': emergencyEmail ?? toEmail, // Fallback to static if not found
+          },
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        _addLog("✅ Email sent successfully.");
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("✅ Email sent")),
+        );
+      } else {
+        _addLog("❌ Email failed: ${response.body}");
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("❌ Email failed: ${response.body}")),
+        );
+      }
+    } catch (e) {
+      _addLog("❌ Exception sending email: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("❌ Exception sending email: $e")),
+      );
+    }
+
+    setState(() {
+      _emailSendingInProgress = false;
+    });
   }
-void _sendEmail() async {
-       if (_emailSendingInProgress) {
-         _addLog("Email sending already in progress, skipping duplicate.");
-         return;
-       }
-     
-       setState(() {
-         _emailSendingInProgress = true;
-       });
-     
-       final now = DateTime.now().toLocal().toString();
-       final url = Uri.parse('https://api.emailjs.com/api/v1.0/email/send');
-     
-       try {
-         final response = await http.post(
-           url,
-           headers: {
-             'origin': 'http://localhost',
-             'Content-Type': 'application/json',
-           },
-           body: json.encode({
-             'service_id': serviceId,
-             'template_id': templateId,
-             'user_id': userIdEmailJS,
-             'template_params': {
-               'name': 'Ackshaya',
-               'time': now,
-               'message': 'Location tracking has started. Coordinates are being stored in Firebase.',
-               'to_email': toEmail,
-             },
-           }),
-         );
-     
-         if (response.statusCode == 200) {
-           _addLog("✅ Email sent successfully.");
-           ScaffoldMessenger.of(context).showSnackBar(
-             SnackBar(content: Text("✅ Email sent")),
-           );
-         } else {
-           _addLog("❌ Email failed: ${response.body}");
-           ScaffoldMessenger.of(context).showSnackBar(
-             SnackBar(content: Text("❌ Email failed: ${response.body}")),
-           );
-         }
-       } catch (e) {
-         _addLog("❌ Exception sending email: $e");
-         ScaffoldMessenger.of(context).showSnackBar(
-           SnackBar(content: Text("❌ Exception sending email: $e")),
-         );
-       }
-     
-       setState(() {
-         _emailSendingInProgress = false;
-       });
-     }
-     
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -202,7 +256,6 @@ void _sendEmail() async {
         padding: const EdgeInsets.all(12),
         child: Column(
           children: [
-            // Status badges:
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
@@ -213,8 +266,6 @@ void _sendEmail() async {
               ],
             ),
             SizedBox(height: 20),
-
-            // Log area:
             Expanded(
               child: Container(
                 decoration: BoxDecoration(
@@ -241,10 +292,7 @@ void _sendEmail() async {
                       ),
               ),
             ),
-
             SizedBox(height: 20),
-
-            // Manual send email button:
             ElevatedButton.icon(
               onPressed: _sendEmail,
               icon: Icon(Icons.email),
