@@ -4,15 +4,14 @@
 #include "I2CKeyPad.h"
 
 // Wi-Fi credentials
-#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_SSID "YOUR_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 
 // Firebase credentials
 #define API_KEY "YOUR_FIREBASE_API"
-#define PROJECT_ID "YOUR_FIREBASE_PROJECT_ID"  // no .firebaseio.com
-
-#define USER_EMAIL "EMAIL_ID"
-#define USER_PASSWORD "PASSWORD"   // Firebase Auth password
+#define PROJECT_ID "FIREBASE_ID"
+#define USER_EMAIL "YOUR_EMAI"
+#define USER_PASSWORD "YOUR_PASSWORD"
 
 FirebaseData fbdo;
 FirebaseAuth auth;
@@ -23,8 +22,9 @@ I2CKeyPad keyPad(KEYPAD_ADDRESS);
 char keys[] = "147*2580369#ABCDNF";
 
 int key1Count = 0;
-unsigned long lastResetTime = 0;  // To track 1-minute interval
-const unsigned long resetInterval = 60000; // 1 minute in milliseconds
+unsigned long firstKeyPressTime = 0;
+bool timerStarted = false;
+const unsigned long waitWindow = 5000; // 5 seconds
 
 void setup() {
   Serial.begin(115200);
@@ -43,15 +43,12 @@ void setup() {
   }
   Serial.println("\nConnected to WiFi");
 
-  // Set API key and credentials
   config.api_key = API_KEY;
   auth.user.email = USER_EMAIL;
   auth.user.password = USER_PASSWORD;
 
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
-
-  lastResetTime = millis(); // Start the timer
 }
 
 void loop() {
@@ -62,35 +59,33 @@ void loop() {
     key1Count++;
     Serial.printf("Key '1' pressed %d times\n", key1Count);
 
-    String documentPath = "keypad/key1";
-
-    FirebaseJson content;
-    content.set("fields/count/integerValue", String(key1Count));
-
-    if (Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", documentPath.c_str(), content.raw(), "count")) {
-      Serial.println("Successfully updated Firestore.");
-    } else {
-      Serial.println("Firestore update failed: " + fbdo.errorReason());
+    if (!timerStarted) {
+      firstKeyPressTime = millis();
+      timerStarted = true;
     }
 
-    delay(100); // Debounce
+    delay(100);  // Debounce
   }
 
-  // Check if one minute has passed
-  if (millis() - lastResetTime >= resetInterval) {
-    key1Count = 0;
-    lastResetTime = millis();
+  if (timerStarted && (millis() - firstKeyPressTime >= waitWindow)) {
+    if (key1Count == 2 || key1Count == 3) {
+      String username = "Akshatha";
+      String documentPath = "keypad/" + username;
 
-    // Update Firestore with reset count
-    String documentPath = "keypad/key1";
-    FirebaseJson content;
-    content.set("fields/count/integerValue", "0");
+      FirebaseJson content;
+      content.set("fields/count/integerValue", String(key1Count));
 
-    if (Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", documentPath.c_str(), content.raw(), "count")) {
-      Serial.println("Count reset to 0 in Firestore.");
+      if (Firebase.Firestore.patchDocument(&fbdo, PROJECT_ID, "", documentPath.c_str(), content.raw(), "count")) {
+        Serial.printf("Count %d uploaded to Firestore.\n", key1Count);
+      } else {
+        Serial.println("Firestore update failed: " + fbdo.errorReason());
+      }
     } else {
-      Serial.println("Failed to reset count: " + fbdo.errorReason());
+      Serial.println("Time expired but count not 2 or 3. Skipping update.");
     }
+
+    // Reset timer and count for next round
+    key1Count = 0;
+    timerStarted = false;
   }
 }
-
