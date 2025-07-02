@@ -4,15 +4,15 @@
 #include "I2CKeyPad.h"
 
 // Wi-Fi credentials
-#define WIFI_SSID "OPPO F17 Pro"
-#define WIFI_PASSWORD "adhithi@265"
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 
 // Firebase credentials
-#define API_KEY "AIzaSyDs8E9NE3kPedZ-0XKv0vceXSOQTQGOy88"
-#define PROJECT_ID "iot-akg"  // no .firebaseio.com
+#define API_KEY "YOUR_FIREBASE_API"
+#define PROJECT_ID "YOUR_FIREBASE_PROJECT_ID"  // no .firebaseio.com
 
-#define USER_EMAIL "abc@gmail.com"
-#define USER_PASSWORD "abc123"   // Firebase Auth password
+#define USER_EMAIL "EMAIL_ID"
+#define USER_PASSWORD "PASSWORD"   // Firebase Auth password
 
 FirebaseData fbdo;
 FirebaseAuth auth;
